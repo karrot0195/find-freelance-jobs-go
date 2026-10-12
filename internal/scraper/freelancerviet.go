@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/html"
@@ -15,6 +16,7 @@ import (
 
 type FreelancerVietProvider struct {
 	browser *rod.Browser
+	mu      sync.Mutex // guards browser init
 }
 
 func init() {
@@ -29,13 +31,18 @@ const (
 	freelancerVietBaseURL = "https://freelancerviet.vn"
 	freelancerVietListURL = "https://freelancerviet.vn/viec-lam-freelance.html"
 	maxPages              = 5
+	concurrency           = 3 // number of concurrent browser pages
 
 	// Job card container: two classes "card-body" and "p-10".
 	jobCardSelector = ".card-body.p-10"
 )
 
 // ensureBrowser lazily starts Chrome and reuses it across calls.
+// Safe for concurrent use.
 func (f *FreelancerVietProvider) ensureBrowser() (*rod.Browser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	if f.browser != nil {
 		return f.browser, nil
 	}
@@ -53,62 +60,135 @@ func (f *FreelancerVietProvider) ensureBrowser() (*rod.Browser, error) {
 
 // Close releases the browser. Call this from main on shutdown.
 func (f *FreelancerVietProvider) Close() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.browser != nil {
 		_ = f.browser.Close()
 		f.browser = nil
 	}
 }
 
+// pageResult is the outcome of scraping one page.
+type pageResult struct {
+	page int
+	jobs []JobItem
+	err  error
+}
+
+// FetchJobs scrapes the job listing pages concurrently using a fixed-size
+// worker pool. Pages are dispatched to workers as soon as they are known,
+// and results are collected and merged while preserving page order.
 func (f *FreelancerVietProvider) FetchJobs(username string) ([]JobItem, error) {
-	fmt.Printf("[%s] Accessing URL: %s for account: %s\n", f.Name(), freelancerVietListURL, username)
+	fmt.Printf("[%s] Starting concurrent scrape (concurrency=%d) for account: %s\n",
+		f.Name(), concurrency, username)
 
 	browser, err := f.ensureBrowser()
 	if err != nil {
 		return nil, fmt.Errorf("failed to start browser: %w", err)
 	}
 
+	// Build the list of page URLs up-front. We don't know the real number of
+	// pages in advance, so we optimistically schedule maxPages and stop as
+	// soon as we detect an empty/error page. The first page is the list URL;
+	// subsequent pages follow the "/page_N.html" pattern.
+	pageURLs := make([]string, maxPages)
+	pageURLs[0] = freelancerVietListURL
+	for i := 1; i < maxPages; i++ {
+		pageURLs[i] = fmt.Sprintf("%s/viec-lam-freelance/page_%d.html", freelancerVietBaseURL, i+1)
+	}
+
+	// Set up the worker pool.
+	jobsCh := make(chan pageResult, maxPages)
+	urlCh := make(chan struct {
+		index int
+		url   string
+	}, maxPages)
+
+	var wg sync.WaitGroup
+	for w := 0; w < concurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range urlCh {
+				doc, err := f.fetchDocument(browser, job.url)
+				var pageJobs []JobItem
+				if err == nil {
+					pageJobs = f.parseJobCards(doc)
+
+					if os.Getenv("DEBUG_DUMP_HTML") == "1" {
+						if derr := dumpHTML(doc, fmt.Sprintf("doc_page_%d.html", job.index+1)); derr != nil {
+							fmt.Printf("[%s] Warning: failed to dump page %d HTML: %v\n",
+								f.Name(), job.index+1, derr)
+						}
+					}
+				}
+				jobsCh <- pageResult{page: job.index + 1, jobs: pageJobs, err: err}
+			}
+		}()
+	}
+
+	// Dispatch all page URLs, then close the channel to signal workers.
+	go func() {
+		for i, u := range pageURLs {
+			urlCh <- struct {
+				index int
+				url   string
+			}{index: i, url: u}
+		}
+		close(urlCh)
+	}()
+
+	// Close jobsCh when all workers are done.
+	go func() {
+		wg.Wait()
+		close(jobsCh)
+	}()
+
+	// Collect results. Preserve page order for deterministic output.
+	results := make([]pageResult, 0, maxPages)
+	for r := range jobsCh {
+		results = append(results, r)
+	}
+
+	// Sort results by page number.
+	for i := 1; i < len(results); i++ {
+		for j := i; j > 0 && results[j-1].page > results[j].page; j-- {
+			results[j-1], results[j] = results[j], results[j-1]
+		}
+	}
+
+	// Merge results, deduping by title+URL. Stop at the first page that
+	// errored or returned zero jobs (that's the natural end of pagination).
 	var jobs []JobItem
 	seen := make(map[string]bool)
-
-	nextURL := freelancerVietListURL
-	page := 0
-
-	for nextURL != "" && page < maxPages {
-		page++
-		fmt.Printf("[%s] Scraping page %d: %s\n", f.Name(), page, nextURL)
-
-		doc, err := f.fetchDocument(browser, nextURL)
-		if err != nil {
-			if page == 1 {
-				return nil, err
+	for _, r := range results {
+		if r.err != nil {
+			if r.page == 1 {
+				return nil, fmt.Errorf("page 1 failed: %w", r.err)
 			}
-			fmt.Printf("[%s] Stopping pagination: %v\n", f.Name(), err)
+			fmt.Printf("[%s] Stopping merge at page %d: %v\n", f.Name(), r.page, r.err)
 			break
 		}
 
-		if os.Getenv("DEBUG_DUMP_HTML") == "1" {
-			if err := dumpHTML(doc, "doc.html"); err != nil {
-				fmt.Printf("[%s] Warning: failed to render doc.html: %v\n", f.Name(), err)
-			}
+		if len(r.jobs) == 0 {
+			fmt.Printf("[%s] Page %d returned 0 jobs — end of pagination\n", f.Name(), r.page)
+			break
 		}
 
-		pageJobs := f.parseJobCards(doc)
 		added := 0
-		for _, job := range pageJobs {
+		for _, job := range r.jobs {
+			if job.Title == "" {
+				continue
+			}
 			key := job.Title + "|" + job.URL
-			if job.Title == "" || seen[key] {
+			if seen[key] {
 				continue
 			}
 			seen[key] = true
 			jobs = append(jobs, job)
 			added++
 		}
-		fmt.Printf("[%s] Page %d: %d cards, %d new jobs\n", f.Name(), page, len(pageJobs), added)
-
-		nextURL = fmt.Sprintf("%s/viec-lam-freelance/page_%d.html", freelancerVietBaseURL, page+1)
-		if nextURL != "" {
-			fmt.Printf("[%s] Next page URL: %s\n", f.Name(), nextURL)
-		}
+		fmt.Printf("[%s] Page %d: %d cards, %d new jobs\n", f.Name(), r.page, len(r.jobs), added)
 	}
 
 	fmt.Printf("[%s] Total jobs found: %d\n", f.Name(), len(jobs))
@@ -118,6 +198,8 @@ func (f *FreelancerVietProvider) FetchJobs(username string) ([]JobItem, error) {
 // fetchDocument drives a real headless browser, waits for React to finish
 // rendering the job list, then pulls the DOM directly via Eval (bypassing
 // page.HTML(), which can lag behind the live DOM for React apps).
+//
+// Each call creates its own page, so it is safe to call concurrently.
 func (f *FreelancerVietProvider) fetchDocument(browser *rod.Browser, targetURL string) (*html.Node, error) {
 	page, err := stealth.Page(browser)
 	if err != nil {
