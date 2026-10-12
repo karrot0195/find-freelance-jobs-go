@@ -5,9 +5,9 @@
 
 ## Job Item Selectors (Post Item)
 Each job card container in the listing page matches the following selector:
-- **Container**: `.card-body`
+- **Container**: `.card-body.p-10`
 
-### Fields Extraction within `.card-body`:
+### Fields Extraction within `.card-body.p-10`:
 1. **Title & URL**:
    - **Selector**: `h3 a`
    - **Attributes**: 
