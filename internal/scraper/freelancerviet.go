@@ -297,7 +297,7 @@ func (f *FreelancerVietProvider) parseJobCards(doc *html.Node) []JobItem {
 func parseCardBody(card *html.Node) JobItem {
 	var item JobItem
 
-	// 1) Title & URL: h3 a
+	// 1) Title & URL
 	if h3 := findChildTagRecursive(card, "h3"); h3 != nil {
 		if a := findChildTagRecursive(h3, "a"); a != nil {
 			item.Title = strings.TrimSpace(extractText(a))
@@ -317,14 +317,14 @@ func parseCardBody(card *html.Node) JobItem {
 		}
 	}
 
-	// 2) Category: first <li> inside the first <ul>
+	// 2) Category
 	if ul := findChildTagRecursive(card, "ul"); ul != nil {
 		if li := findChildTagRecursive(ul, "li"); li != nil {
 			item.Category = strings.TrimSpace(extractText(li))
 		}
 	}
 
-	// 3) Price: <p class="font-size-24">
+	// 3) Price
 	var findPrice func(*html.Node)
 	findPrice = func(n *html.Node) {
 		if item.Price != "" {
@@ -340,9 +340,37 @@ func parseCardBody(card *html.Node) JobItem {
 	}
 	findPrice(card)
 
+	// 4) Description: the FIRST <p> that is NOT the price paragraph.
+	var findDesc func(*html.Node) bool
+	findDesc = func(n *html.Node) bool {
+		if n.Type == html.ElementNode && n.Data == "p" && !hasClass(n, "font-size-24") {
+			txt := strings.TrimSpace(extractText(n))
+			if txt != "" {
+				item.Description = shorten(txt, 100)
+				return true
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if findDesc(c) {
+				return true
+			}
+		}
+		return false
+	}
+	findDesc(card)
+
 	return item
 }
 
+// shorten trims to at most n words and appends "..." if truncated.
+func shorten(s string, maxWords int) string {
+	s = strings.Join(strings.Fields(s), " ") // collapse whitespace
+	words := strings.Fields(s)
+	if len(words) <= maxWords {
+		return s
+	}
+	return strings.Join(words[:maxWords], " ") + " ..."
+}
 func hasClass(n *html.Node, className string) bool {
 	if n == nil {
 		return false

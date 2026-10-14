@@ -3,10 +3,11 @@ package scraper
 import "fmt"
 
 type JobItem struct {
-	Title    string
-	URL      string
-	Category string
-	Price    string
+	Title       string
+	URL         string
+	Category    string
+	Price       string
+	Description string // NEW
 }
 
 // JobProvider defines the standard contract every job site must implement

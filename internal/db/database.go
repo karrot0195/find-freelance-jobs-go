@@ -15,13 +15,14 @@ type Account struct {
 }
 
 type Job struct {
-	ID        int
-	Title     string
-	URL       string
-	Category  string
-	Price     string
-	Provider  string
-	CreatedAt string
+	ID          int
+	Title       string
+	URL         string
+	Category    string
+	Price       string
+	Description string
+	Provider    string
+	CreatedAt   string
 }
 
 var DB *sql.DB
@@ -47,6 +48,7 @@ func InitDB() {
 		url TEXT UNIQUE NOT NULL,
 		category TEXT,
 		price TEXT,
+		description TEXT,
 		provider TEXT NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
@@ -73,10 +75,6 @@ func GetAccounts() []Account {
 	return accounts
 }
 
-func AddAccount(provider, username string) {
-	DB.Exec("INSERT INTO accounts (provider, username, enabled) VALUES (?, ?, ?)", provider, username, true)
-}
-
 func ClearJobs() {
 	_, err := DB.Exec("DELETE FROM jobs")
 	if err != nil {
@@ -84,15 +82,21 @@ func ClearJobs() {
 	}
 }
 
-func SaveJob(title, url, category, price, provider string) {
-	_, err := DB.Exec("INSERT OR IGNORE INTO jobs (title, url, category, price, provider) VALUES (?, ?, ?, ?, ?)", title, url, category, price, provider)
+func SaveJob(title, url, category, price, description, provider string) {
+	_, err := DB.Exec(
+		`INSERT OR IGNORE INTO jobs (title, url, category, price, description, provider)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		title, url, category, price, description, provider,
+	)
 	if err != nil {
 		log.Printf("Failed to save job: %v", err)
 	}
 }
 
 func GetJobs() []Job {
-	rows, err := DB.Query("SELECT id, title, url, category, price, provider, created_at FROM jobs ORDER BY id DESC")
+	rows, err := DB.Query(
+		`SELECT id, title, url, category, price, description, provider, created_at
+		 FROM jobs ORDER BY id DESC`)
 	if err != nil {
 		return nil
 	}
@@ -101,8 +105,36 @@ func GetJobs() []Job {
 	var jobs []Job
 	for rows.Next() {
 		var j Job
-		rows.Scan(&j.ID, &j.Title, &j.URL, &j.Category, &j.Price, &j.Provider, &j.CreatedAt)
+		rows.Scan(&j.ID, &j.Title, &j.URL, &j.Category, &j.Price, &j.Description, &j.Provider, &j.CreatedAt)
 		jobs = append(jobs, j)
 	}
 	return jobs
+}
+
+func AddAccount(provider, username string) {
+	_, err := DB.Exec(
+		"INSERT INTO accounts (provider, username, enabled) VALUES (?, ?, ?)",
+		provider, username, true,
+	)
+	if err != nil {
+		log.Printf("Failed to add account: %v", err)
+	}
+}
+
+func GetEnabledAccounts() []Account {
+	rows, err := DB.Query("SELECT id, provider, username, enabled FROM accounts WHERE enabled = 1")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var accounts []Account
+	for rows.Next() {
+		var a Account
+		if err := rows.Scan(&a.ID, &a.Provider, &a.Username, &a.Enabled); err != nil {
+			continue
+		}
+		accounts = append(accounts, a)
+	}
+	return accounts
 }
