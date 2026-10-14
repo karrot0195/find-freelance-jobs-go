@@ -17,3 +17,4 @@ Use this skill when the user asks to create or update project documentation, wor
    - Ensure accurate stack details and setup/build steps (`make build`, `./bin/...`).
    - Match exact directory trees and schema references.
 4. **Write/Update Markdown**: Generate clear, scannable markdown files using proper headings, code blocks, and lists.
+   - Auto-load images from `./assets` (e.g., `<img src="./assets/linux.png" />` as in README.md).

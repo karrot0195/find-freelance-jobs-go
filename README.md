@@ -3,6 +3,7 @@
 A Go-based job aggregation project that monitors freelance postings across supported providers, stores results in SQLite, and exposes them through a small REST API plus a Gio desktop UI.
 
 <img src="./assets/linux.png" />
+<img src="./assets/apk.jpg" />
 
 
 ## What the app does
@@ -56,7 +57,6 @@ find-freelance-jobs/
 ├── makefile                    # Build and run helpers
 ├── README.md
 ├── .gitignore
-└── .claude/
 ```
 
 ## Architecture
@@ -129,6 +129,22 @@ CREATE TABLE IF NOT EXISTS jobs (
 ```bash
 go mod download
 ```
+
+### Build Android APK
+
+```bash
+make build-apk
+```
+
+Produces `./bin/job-aggregator.apk`.
+
+### Deploy
+
+```bash
+make deploy <script-name>
+```
+
+Uses `.server/<script-name>.sh` (e.g., `apk.sh`, `server.sh`).
 
 ### Build
 

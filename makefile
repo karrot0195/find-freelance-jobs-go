@@ -18,7 +18,11 @@ run: build kill-app
 	APP_PORT=":8080" API_KEY=secret API_SECRET_KEY=secret ./bin/job-aggregator-server &
 	./bin/job-aggregator-ui &
 
-deploy: clean build
+deploy:
+	@if [ -z "$(word 2,$(MAKECMDGOALS))" ]; then \
+		echo "Error: Please specify a server target script. Usage: make deploy <script-name>"; \
+		exit 1; \
+	fi
 	@./.server/$(word 2,$(MAKECMDGOALS)).sh
 
 # Catch-all to prevent make from treating the app name as a target
