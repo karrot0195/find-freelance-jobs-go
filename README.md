@@ -2,6 +2,9 @@
 
 A Go-based job aggregation project that monitors freelance postings across supported providers, stores results in SQLite, and exposes them through a small REST API plus a Gio desktop UI.
 
+<img src="./assets/linux.png" />
+
+
 ## What the app does
 
 - Lets the user add provider accounts from the UI
