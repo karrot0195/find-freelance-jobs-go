@@ -3,3 +3,4 @@ bin/
 .dev
 *.html
 .promt/
+.server/
