@@ -4,6 +4,9 @@ build:
 	go build -o ./bin/job-aggregator-server ./cmd/server/
 	go build -o ./bin/job-aggregator-ui ./cmd/app
 
+build-apk:
+	gogio -target android -o ./bin/job-aggregator.apk ./cmd/app/main.go
+
 kill-app:
 	-pkill -f '/bin/job-aggregator-server'
 	-pkill -f '/bin/job-aggregator-ui'

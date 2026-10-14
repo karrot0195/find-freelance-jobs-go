@@ -29,20 +29,41 @@ type Job struct {
 
 type RestClient struct {
 	apiUrl     string
+	apiKey     string
 	httpClient *http.Client
 }
 
-func NewRestClient(apiUrl string) *RestClient {
+func NewRestClient(apiUrl, apiKey string) *RestClient {
 	return &RestClient{
 		apiUrl: apiUrl,
+		apiKey: apiKey,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
 		},
 	}
 }
 
+// newRequest builds an http.Request with the API key header attached.
+func (r *RestClient) newRequest(method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, r.apiUrl+path, body)
+	if err != nil {
+		return nil, err
+	}
+	if r.apiKey != "" {
+		req.Header.Set("X-API-Key", r.apiKey)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req, nil
+}
+
 func (r *RestClient) Ping() error {
-	resp, err := r.httpClient.Get(r.apiUrl + "/ping")
+	req, err := r.newRequest(http.MethodGet, "/ping", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -54,7 +75,11 @@ func (r *RestClient) Ping() error {
 }
 
 func (r *RestClient) GetAccounts() []Account {
-	resp, err := r.httpClient.Get(r.apiUrl + "/GetAccounts")
+	req, err := r.newRequest(http.MethodGet, "/GetAccounts", nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return nil
 	}
@@ -68,7 +93,11 @@ func (r *RestClient) GetAccounts() []Account {
 }
 
 func (r *RestClient) GetJobs() []Job {
-	resp, err := r.httpClient.Get(r.apiUrl + "/GetJobs")
+	req, err := r.newRequest(http.MethodGet, "/GetJobs", nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return nil
 	}
@@ -88,11 +117,11 @@ func (r *RestClient) AddAccount(provider, username string) error {
 	}
 	body, _ := json.Marshal(payload)
 
-	resp, err := r.httpClient.Post(
-		r.apiUrl+"/AddAccount",
-		"application/json",
-		bytes.NewReader(body),
-	)
+	req, err := r.newRequest(http.MethodPost, "/AddAccount", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -106,7 +135,11 @@ func (r *RestClient) AddAccount(provider, username string) error {
 }
 
 func (r *RestClient) StartCrawlJobs() error {
-	resp, err := r.httpClient.Post(r.apiUrl+"/StartCrawlJobs", "application/json", nil)
+	req, err := r.newRequest(http.MethodPost, "/StartCrawlJobs", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return err
 	}

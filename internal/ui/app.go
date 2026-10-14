@@ -82,6 +82,11 @@ func Run() error {
 	apiUrlInput.Submit = true
 	apiUrlInput.SetText(apiUrl()) // pre-fill with current value
 
+	var apiKeyInput widget.Editor
+	apiKeyInput.SingleLine = true
+	apiKeyInput.Submit = true
+	apiKeyInput.SetText(apiKey()) // pre-fill with current value
+
 	// Loading state — driven by background goroutines.
 	var isLoading bool
 	var progressText string
@@ -136,8 +141,9 @@ func Run() error {
 			}
 
 			if settingsNavBtn.Clicked(gtx) {
-				// Refresh the field with the current URL whenever we open Settings.
+				// Refresh the fields with the current values whenever we open Settings.
 				apiUrlInput.SetText(apiUrl())
+				apiKeyInput.SetText(apiKey())
 				currentState = ScreenSettings
 			}
 
@@ -157,14 +163,18 @@ func Run() error {
 			}
 
 			if saveSettingsBtn.Clicked(gtx) {
-				raw := strings.TrimSpace(apiUrlInput.Text())
-				if raw == "" {
+				rawURL := strings.TrimSpace(apiUrlInput.Text())
+				rawKey := strings.TrimSpace(apiKeyInput.Text())
+				switch {
+				case rawURL == "":
 					progressText = "Error: URL cannot be empty"
-				} else if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+				case !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://"):
 					progressText = "Error: URL must start with http:// or https://"
-				} else {
+				case rawKey == "":
+					progressText = "Error: API secret key cannot be empty"
+				default:
 					// Swap the client and probe the new endpoint.
-					setApiUrl(strings.TrimRight(raw, "/"))
+					setApiConfig(strings.TrimRight(rawURL, "/"), rawKey)
 					isLoading = true
 					progressText = "Testing connection..."
 					go func() {
@@ -182,19 +192,29 @@ func Run() error {
 			}
 
 			if testSettingsBtn.Clicked(gtx) {
-				isLoading = true
-				progressText = "Testing connection..."
-				go func() {
-					start := time.Now()
-					if err := client().Ping(); err != nil {
-						progressCh <- progressMsg{Message: "Ping failed: " + err.Error()}
-					} else {
-						progressCh <- progressMsg{
-							Message: fmt.Sprintf("Pong in %s", time.Since(start).Round(time.Millisecond)),
+				// Test using the values currently in the form (without saving).
+				rawURL := strings.TrimSpace(apiUrlInput.Text())
+				rawKey := strings.TrimSpace(apiKeyInput.Text())
+				if rawURL == "" || rawKey == "" {
+					progressText = "Error: URL and API key are required to test"
+				} else {
+					isLoading = true
+					progressText = "Testing connection..."
+					testURL := strings.TrimRight(rawURL, "/")
+					testKey := rawKey
+					go func() {
+						start := time.Now()
+						testClient := rest.NewRestClient(testURL, testKey)
+						if err := testClient.Ping(); err != nil {
+							progressCh <- progressMsg{Message: "Ping failed: " + err.Error()}
+						} else {
+							progressCh <- progressMsg{
+								Message: fmt.Sprintf("Pong in %s", time.Since(start).Round(time.Millisecond)),
+							}
 						}
-					}
-					progressCh <- progressMsg{Done: true}
-				}()
+						progressCh <- progressMsg{Done: true}
+					}()
+				}
 			}
 
 			// Global padding.
@@ -239,6 +259,7 @@ func Run() error {
 							return renderSettings(
 								gtx, theme,
 								&apiUrlInput,
+								&apiKeyInput,
 								&saveSettingsBtn, &testSettingsBtn, &backBtn,
 								isLoading, progressText,
 							)
@@ -389,11 +410,12 @@ func renderDashboard(
 	)
 }
 
-// renderSettings provides a form to change the REST API base URL at runtime.
+// renderSettings provides a form to change the REST API base URL and
+// secret key at runtime.
 func renderSettings(
 	gtx layout.Context,
 	theme *material.Theme,
-	urlInput *widget.Editor,
+	urlInput, keyInput *widget.Editor,
 	saveBtn, testBtn, backBtn *widget.Clickable,
 	isLoading bool,
 	progressText string,
@@ -403,6 +425,8 @@ func renderSettings(
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Spacer{Height: unit.Dp(8)}.Layout(gtx)
 		}),
+
+		// --- API URL ---
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			lbl := material.Body2(theme, "REST API base URL (e.g. http://localhost:8080)")
 			lbl.Color = color.NRGBA{R: 100, G: 100, B: 100, A: 255}
@@ -414,6 +438,24 @@ func renderSettings(
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return material.Editor(theme, urlInput, "http://localhost:8080").Layout(gtx)
 		}),
+
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Spacer{Height: unit.Dp(16)}.Layout(gtx)
+		}),
+
+		// --- API Secret Key ---
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Body2(theme, "API Secret Key (sent as X-API-Key header)")
+			lbl.Color = color.NRGBA{R: 100, G: 100, B: 100, A: 255}
+			return lbl.Layout(gtx)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Spacer{Height: unit.Dp(8)}.Layout(gtx)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return material.Editor(theme, keyInput, "your-secret-key").Layout(gtx)
+		}),
+
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Spacer{Height: unit.Dp(16)}.Layout(gtx)
 		}),

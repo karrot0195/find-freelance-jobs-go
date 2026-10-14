@@ -1,57 +1,82 @@
 # Part-Time Job Aggregator
 
-A desktop job aggregator built in Go for tracking freelance opportunities from supported providers. The current implementation focuses on **Freelancer Việt** and stores the results in a local SQLite database, with a Gio-based interface for browsing and refreshing jobs.
+A Go-based job aggregation project that monitors freelance postings across supported providers, stores results in SQLite, and exposes them through a small REST API plus a Gio desktop UI.
 
 ## What the app does
 
-- Lets the user add a provider account/email from the UI
-- Stores enabled accounts in SQLite
-- Runs a "Start All" sweep to fetch jobs from every enabled provider
-- Parses provider-specific HTML into a consistent `JobItem` shape
-- Saves jobs with a unique URL constraint so duplicates are ignored
-- Displays the latest job results in a table view
+- Lets the user add provider accounts from the UI
+- Persists enabled accounts in SQLite
+- Crawls all enabled provider accounts when the user clicks Start All
+- Normalizes each provider result into the same `JobItem` shape
+- Deduplicates by job URL before inserting into the database
+- Displays the jobs in a desktop dashboard and lets the user configure the API endpoint
 
 ## Tech stack
 
-- **Language:** Go
-- **UI:** [Gio](https://gioui.org/)
-- **Database:** SQLite via `modernc.org/sqlite`
-- **Scraping:** Standard library `net/http` + Go HTML parsing (`golang.org/x/net/html`)
-- **Platforms:** Linux, macOS, Windows
+- Language: Go
+- API: Gin
+- UI: Gio
+- Database: SQLite via `modernc.org/sqlite`
+- Scraping: standard library HTTP + HTML parsing via `golang.org/x/net/html`
+- Platforms: Linux, macOS, Windows
 
 ## Project structure
 
 ```text
 find-freelance-jobs/
-├── main.go                     # App bootstrap and database initialization
-├── makefile                    # Build target: `make build`
-├── go.mod
-├── go.sum
-├── jobs.db                     # Local SQLite database generated at runtime
-├── bin/
-│   └── job-aggregator         # Built binary
+├── cmd/
+│   ├── app/
+│   │   └── main.go             # Gio desktop client entry point
+│   └── server/
+│       └── main.go             # Gin API entry point
 ├── internal/
 │   ├── db/
-│   │   └── database.go         # Account/job persistence helpers
+│   │   └── database.go         # SQLite functions for accounts and jobs
+│   ├── rest/
+│   │   └── app_rest.go         # HTTP client used by the UI
 │   ├── scraper/
 │   │   ├── provider.go         # Provider registry contract
-│   │   └── freelancerviet.go   # Freelancer Việt scraper implementation
+│   │   └── freelancerviet.go   # Freelancer Việt scraper
 │   └── ui/
-│       └── app.go              # Gio dashboard and account form UI
+│       └── app.go              # Dashboard, settings, and add-account screens
 ├── docs/
-│   ├── FLOW.md                 # End-to-end runtime workflow
+│   ├── FLOW.md                 # End-to-end runtime flow
 │   └── providers/
 │       ├── freelancer-viet.spec.md
 │       └── template.md
+├── bin/
+│   ├── job-aggregator-server   # Built server binary
+│   └── job-aggregator-ui       # Built UI binary
+├── go.mod
+├── go.sum
+├── jobs.db                     # Runtime SQLite database (created automatically)
+├── makefile                    # Build and run helpers
 ├── README.md
-└── .gitignore
+├── .gitignore
+└── .claude/
 ```
 
-## Core architecture
+## Architecture
 
-### Provider registry
+### Server layer
 
-`internal/scraper/provider.go` defines the `JobProvider` interface:
+`cmd/server/main.go` starts a Gin HTTP server on `:8080` and exposes endpoints for:
+
+- `GET /ping`
+- `GET /GetAccounts`
+- `POST /AddAccount`
+- `GET /GetJobs`
+- `POST /StartCrawlJobs`
+
+The server reads and writes data through `internal/db`, and for each enabled account it calls `scraper.FetchJobs(providerName, username)`.
+
+### UI layer
+
+`cmd/app/main.go` boots the Gio app. `internal/ui/app.go` renders a dashboard, settings screen, and add-account form. The UI does not scrape directly; it calls the REST API through `internal/rest/app_rest.go`.
+
+### Provider layer
+
+`internal/scraper/provider.go` defines the shared provider contract:
 
 ```go
 type JobProvider interface {
@@ -60,49 +85,19 @@ type JobProvider interface {
 }
 ```
 
-Each provider registers itself in an `init()` function and is exposed via global registry functions (`Register`, `FetchJobs`, `GetSupportedProviders`). This keeps the UI and database layer independent from site-specific scraping logic.
+Registered providers are resolved through the global registry and normalized into the same `JobItem` model before they are saved.
 
-### Scraping flow
+## Supported provider
 
-1. The user opens the dashboard and clicks **Start All**.
-2. `db.ClearJobs()` removes stale job rows.
-3. `db.GetAccounts()` loads all enabled accounts.
-4. For each enabled account, the app calls `scraper.FetchJobs(providerName, username)`.
-5. The selected provider fetches and parses HTML into a standardized `JobItem` list.
-6. Each item is saved with `db.SaveJob(...)` using an `INSERT OR IGNORE` pattern for deduplication by URL.
+The current implementation includes:
 
-### UI flow
+- Freelancer Việt
 
-`internal/ui/app.go` manages two screens:
-
-- `ScreenDashboard`: shows the start button, account summary, and jobs table
-- `ScreenAddAccount`: captures a username/email and stores it in the SQLite accounts table
-
-## Supported providers
-
-At the moment, the app includes support for:
-
-- `Freelancer Việt`
-
-Provider-specific parsing notes and DOM selectors live under `docs/providers/`.
-
-## Development and run instructions
-
-### Build
-
-```bash
-make build
-```
-
-### Run
-
-```bash
-./bin/job-aggregator
-```
+The provider-specific selectors and extraction rules live in `docs/providers/freelancer-viet.spec.md`.
 
 ## Database schema
 
-The app creates the following tables when it starts:
+On startup, the app creates a local SQLite database at `./jobs.db` with these tables:
 
 ```sql
 CREATE TABLE IF NOT EXISTS accounts (
@@ -118,21 +113,72 @@ CREATE TABLE IF NOT EXISTS jobs (
     url TEXT UNIQUE NOT NULL,
     category TEXT,
     price TEXT,
+    description TEXT,
     provider TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
+## Development and run instructions
+
+### Install dependencies
+
+```bash
+go mod download
+```
+
+### Build
+
+```bash
+make build
+```
+
+This produces:
+
+```bash
+./bin/job-aggregator-server
+./bin/job-aggregator-ui
+```
+
+### Run everything together
+
+```bash
+make run
+```
+
+This starts both the API server and the desktop UI.
+
+### Run manually
+
+```bash
+./bin/job-aggregator-server
+./bin/job-aggregator-ui
+```
+
+Make sure the server is running before the UI makes API requests.
+
+## End-to-end workflow
+
+1. User launches the UI.
+2. The UI loads the API base URL from settings and tests connectivity with `/ping`.
+3. User adds one or more accounts via the add-account form.
+4. User clicks Start All.
+5. The UI posts to `POST /StartCrawlJobs`.
+6. The server clears old job rows and fetches enabled accounts.
+7. Each provider scrapes listings and normalizes them into `JobItem` records.
+8. The server inserts jobs using `INSERT OR IGNORE` on `jobs.url` to avoid duplicate entries.
+9. The UI refreshes and displays the latest results in the dashboard.
+
 ## Adding a new provider
 
-1. Create a provider spec in `docs/providers/` following `template.md`
-2. Add a new scraper implementation under `internal/scraper/`
-3. Implement `Name()` and `FetchJobs(username string)`
-4. Register it in `init()` with `Register(...)`
-5. Rebuild and use the app to fetch jobs from the new provider
+1. Create a provider spec in `docs/providers/` using the template.
+2. Implement a new scraper in `internal/scraper/` that satisfies the `JobProvider` interface.
+3. Register it in an `init()` function.
+4. Rebuild the binaries and test the new provider through the Start All workflow.
 
 ## Notes
 
-- The scraper currently targets `https://freelancerviet.vn/viec-lam-freelance.html`
-- If the site markup changes, it falls back to a sample mock job record so the app remains functional in restricted environments
-- Results are stored locally in `./jobs.db`, which is created automatically on first run
+- The current scraper targets `https://freelancerviet.vn/viec-lam-freelance.html`.
+- If the site structure changes, the provider falls back to a sample job record so the UI can remain usable during testing.
+- All results are stored locally in `./jobs.db` when the server starts.
+- The project is designed as a small internal automation tool rather than a distributed web service.
