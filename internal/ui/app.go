@@ -56,6 +56,13 @@ type progressMsg struct {
 }
 
 func Run() error {
+	st, err := NewStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	InitStore(st) // must run before any client()/apiUrl() call
 	window := new(app.Window)
 	window.Option(app.Title("Part-Time Job Aggregator"))
 
